@@ -1,281 +1,236 @@
 // LCD module connections
-sbit LCD_RS at RB4_bit;
-sbit LCD_EN at RB5_bit;
-sbit LCD_D4 at RB0_bit;
-sbit LCD_D5 at RB1_bit;
-sbit LCD_D6 at RB2_bit;
-sbit LCD_D7 at RB3_bit;
+sbit LCD_RS at RB4_bit;              // RS (Register Select): tells LCD if data is command (0) or text (1)
+sbit LCD_EN at RB5_bit;              // EN (Enable): used to latch data into LCD on falling edge (1->0)
+sbit LCD_D4 at RB0_bit;              // D4 pin of LCD connected to RB0
+sbit LCD_D5 at RB1_bit;              // D5 pin of LCD connected to RB1
+sbit LCD_D6 at RB2_bit;              // D6 pin of LCD connected to RB2
+sbit LCD_D7 at RB3_bit;              // D7 pin of LCD connected to RB3
 
-sbit LCD_RS_Direction at TRISB4_bit;
-sbit LCD_EN_Direction at TRISB5_bit;
-sbit LCD_D4_Direction at TRISB0_bit;
-sbit LCD_D5_Direction at TRISB1_bit;
-sbit LCD_D6_Direction at TRISB2_bit;
-sbit LCD_D7_Direction at TRISB3_bit;
+// LCD direction configuration (input/output setup)
+sbit LCD_RS_Direction at TRISB4_bit; // Configure RB4 as output for RS control
+sbit LCD_EN_Direction at TRISB5_bit; // Configure RB5 as output for EN signal
+sbit LCD_D4_Direction at TRISB0_bit; // Configure RB0 as output for D4 data
+sbit LCD_D5_Direction at TRISB1_bit; // Configure RB1 as output for D5 data
+sbit LCD_D6_Direction at TRISB2_bit; // Configure RB2 as output for D6 data
+sbit LCD_D7_Direction at TRISB3_bit; // Configure RB3 as output for D7 data
 // End LCD module connections
 
+// ==== Global variables ====
+int Tank_Distance = 0;               // Holds the measured distance from ultrasonic sensor
+int angle;                           // PWM pulse width to control servo angle
+int H_L;                             // High/Low toggle for PWM pulse phase
+int pump_speed;                      // Speed of pump, read from potentiometer
+int b;                               // Servo enable flag (1 = active)
+int GasValue;                        // Placeholder for gas sensor (unused)
+int time;                            // Used in software delay loop
+int o;                               // Cover sensor status: 1 = cap present, 0 = no cap
+int a;                               // Toggle state for opening/closing the servo once
 
-
-
-
-
-
-
-int Tank_Distance=0;
-int angle;
-int H_L;
-int pump_speed;   //Value For pump speed from Potentiometer
-int b ;
-int GasValue;
-int time;
-
-
+// === Custom delay function based on timer interrupts ===
 void delay_in_ms(int time_ms) {
-    time=0;                 // Reset overflow counter
-    while (time < time_ms);
+    time = 0;                         // Reset time counter
+    while (time < time_ms);          // Wait until timer interrupt increments "time"
 }
 
+// === Interrupt routine for Timer0 and CCP1 ===
+void interrupt(void) {
+    if (INTCON & 0x04) {             // Check if Timer0 overflow interrupt occurred
+        time++;                      // Increment software counter
+        time = time / 32;            // Approximate conversion to milliseconds (overflow every ~32ms)
 
+        // Read cover status: If bit 3 of PORTD is high → cap is off
+        if (PORTD & 0b00001000) {
+            o = 0;                   // No cap detected
+        } else {
+            o = 1;                   // Cap detected
+        }
 
-int o;
-void interrupt(void){
+        INTCON &= 0xFB;              // Clear Timer0 interrupt flag (bit 2 of INTCON)
+    }
 
-     if(INTCON & 0x04){        //overflow in 32ms
-     
-               time++;
-               time=time/32; //for delay 1ms
+    // CCP1 interrupt for software PWM generation
+    if (PIR1 & 0x04) {
+        if (b == 1) {                // Only act if servo is enabled
+            if (H_L) {               // High part of PWM
+                CCPR1H = angle >> 8; // Set high byte of compare match
+                CCPR1L = angle;      // Set low byte of compare match
+                H_L = 0;             // Switch to low next
+                CCP1CON = 0x09;      // Set compare mode: clear output on match
+                TMR1H = 0;           // Reset Timer1
+                TMR1L = 0;
+            } else {                // Low part of PWM
+                CCPR1H = (40000 - angle) >> 8; // Calculate remaining time for 20ms period
+                CCPR1L = (40000 - angle);
+                CCP1CON = 0x08;     // Compare mode: set output on match
+                H_L = 1;            // Switch to high next
+                TMR1H = 0;          // Reset Timer1
+                TMR1L = 0;
+            }
+        } else {
+            PIR1 &= 0xFB;           // Clear CCP1 interrupt flag
+        }
 
-          if(PORTD&0B00001000){
-          O=0;
-          }else{
-          o=1;
-          }
+        PIR1 &= 0xFB;               // Always clear CCP1 interrupt flag at the end
+    }
+}
 
+// === Measure distance using ultrasonic sensor ===
+int dist() {
+    int d = 0;
 
+    TMR1H = 0;                      // Reset Timer1 high byte
+    TMR1L = 0;                      // Reset Timer1 low byte
 
+    PORTC |= 0b00001000;            // Set trigger pin high (RC3)
+    delay_in_ms(10);                // Wait 10 microseconds (short trigger pulse)
+    PORTC &= 0b11110111;            // Set trigger pin low
 
+    while (!(PORTC & 0b00010000));  // Wait for echo pin to go high (RC4)
 
-         INTCON = INTCON & 0xFB;    // clear timer 0 interrupt flag
+    T1CON |= 0x01;                  // Start Timer1
 
-     }
+    while (PORTC & 0b00010000);     // Wait for echo pin to go low
 
+    T1CON &= ~0x01;                 // Stop Timer1
 
-       if(PIR1 & 0x04){
-       if(b==1){                                           // CCP1 interrupt
-             if(H_L){                                // high
-                       CCPR1H = angle >> 8;
-                       CCPR1L = angle;
-                       H_L = 0;                      // next time low
-                       CCP1CON = 0x09;              // compare mode, clear output on match
-                       TMR1H = 0;
-                       TMR1L = 0;
-             }
-             else{                                          //low
-                       CCPR1H = (40000 - angle) >> 8;       // 40000 counts correspond to 20ms
-                       CCPR1L = (40000 - angle);
-                       CCP1CON = 0x08;             // compare mode, set output on match
-                       H_L = 1;                     //next time High
-                       TMR1H = 0;
-                       TMR1L = 0;
-             }  }else{
-              PIR1 = PIR1&0xFB;
-             }
+    d = (TMR1L | (TMR1H << 8));     // Combine Timer1 values
+    d = d / 58.82;                  // Convert time to distance (based on sound speed)
 
-             PIR1 = PIR1&0xFB;
-       }
-
-
- }
-
-
-
-int dist(){
-int d = 0;
-
-
-    TMR1H = 0;                  // Reset Timer1
-    TMR1L = 0;
-
-    PORTC = PORTC | 0b00001000; // Trigger HIGH
-    delay_in_ms(10);               // 10 µs delay
-    PORTC = PORTC & 0b11110111; // Trigger LOW
-
-    while (!(PORTC & 0b00010000));
-
-
-    T1CON = T1CON | 0b00000001; // Start Timer
-
-
-    while (PORTC & 0b00010000);
-
-
-    T1CON = T1CON & 0b11111110; // Stop Timer
-
-    d = (TMR1L | (TMR1H << 8)); // Read Timer1 value
-    d = d / 58.82;           // Convert time to distance (cm)
-    delay_ms(10);
-    T1CON = 0x01;
+    delay_ms(10);                   // Small delay between readings
+    T1CON = 0x01;                   // Re-enable Timer1
     return d;
 }
 
-void ATD_init(){
-      ADCON0=0x41;           // ON, Channel 0, Fosc/16== 500KHz, Dont Go
-      ADCON1=0xCE;           // RA0 Analog, others are Digital, Right Allignment,
-      TRISA=0x01;
-}
-int ATD_read(){
-      ADCON0=ADCON0 | 0x04;  // GO
-      while(ADCON0&0x04);    // wait until DONE
-      return (ADRESH<<8)|ADRESL;
+// === ADC initialization to read potentiometer ===
+void ATD_init() {
+    ADCON0 = 0x41;                  // Enable ADC, select channel 0 (RA0), clock Fosc/16
+    ADCON1 = 0xCE;                  // Only RA0 is analog, others digital; right justified result
+    TRISA = 0x01;                   // Set RA0 as input
 }
 
-void CCPPWM_init(){                  // Configure CCP1 and CCP2 at 2ms period with 50% duty cycle
-        T2CON = 0x07;                    // Enable Timer2 at Fosc/4 with 1:16 prescaler (8 uS percount 2000uS to count 250 counts)
-        CCP2CON = 0x0C;                  // Enable PWM for CCP2
-        PR2 = 250;                       // 250 counts = 8uS *250 = 2ms period
-        CCPR2L = 125;                    // Buffer where we are specifying the pulse width (duty cycle)
+// === Read analog value from RA0 ===
+int ATD_read() {
+    ADCON0 |= 0x04;                 // Start ADC conversion
+    while (ADCON0 & 0x04);          // Wait for conversion to complete
+    return (ADRESH << 8) | ADRESL;  // Return 10-bit value
 }
 
-
-void Speed(int p){
-       p = (((p>>2)*250)/255);
-       CCPR2L = p;                  // PWM from RC1
+// === Initialize PWM for pump control via CCP2 ===
+void CCPPWM_init() {
+    T2CON = 0x07;                   // Enable Timer2 with 1:16 prescaler
+    CCP2CON = 0x0C;                 // Configure CCP2 for PWM mode
+    PR2 = 250;                      // Set PWM period to 2ms (8us × 250)
+    CCPR2L = 125;                   // 50% duty cycle
 }
 
-
-
-
-int a;  //Tick For Ultrasonic and Servo
-void main(){
-TRISA=0B00000000;
-TRISB=0B00000000;
-TRISC=0B00110000;
-TRISD=0B11101100;
-
-PORTA=0B00000000;
-PORTB=0B00000000;
-PORTC=0B00000000;
-PORTD=0B00000000;
-
-Lcd_Init();
-Lcd_Cmd(_LCD_CLEAR);               // Clear display
-Lcd_Cmd(_LCD_CURSOR_OFF);          // Cursor off
-
-
-
-
-
-
-OPTION_REG = 0x87; // 32.8ms overflow
-TMR0 = 0;
-TMR1H = 0;
-TMR1L = 0;
-H_L = 1;                // start high
-CCP1CON = 0x08;        // Compare mode, set output on match
-T1CON = 0x01;
-INTCON = 0b11100000;         // Enable GIE, peripheral interrupts and TMR0 Interrupt
-PIE1 = PIE1|0x04;      // Enable CCP1 interrupts
-CCPR1H = 2000>>8;      // Value preset in a program to compare the TMR1H value to            - 1ms
-CCPR1L = 2000;         // Value preset in a program to compare the TMR1L value to
-
-
-
-
-if(PORTD&0B00100000){     // Cheak the servo switch stats
-a=1;
-}else{
-a=0;
+// === Control PWM duty cycle for the pump ===
+void Speed(int p) {
+    p = (((p >> 2) * 250) / 255);   // Scale 10-bit ADC (0-1023) to 8-bit PWM (0-250)
+    CCPR2L = p;                     // Update duty cycle
 }
 
-ATD_init();
+// === Main function ===
+void main() {
+    // Set direction of all ports
+    TRISA = 0b00000000;             // All output except RA0 set in ATD_init
+    TRISB = 0b00000000;             // All outputs for LCD
+    TRISC = 0b00110000;             // RC4/RC5 as input (echo), others output
+    TRISD = 0b11101100;             // PD2, PD3, PD5, PD7 inputs (buttons, cap sensor)
 
-CCPPWM_init();
+    // Clear all PORTS initially
+    PORTA = 0;
+    PORTB = 0;
+    PORTC = 0;
+    PORTD = 0;
 
-while(1){
+    // LCD Setup
+    Lcd_Init();
+    Lcd_Cmd(_LCD_CLEAR);
+    Lcd_Cmd(_LCD_CURSOR_OFF);
 
-if(PORTD&0B00100000){ // Servo switch is ON
+    // Timer0 setup for software timing
+    OPTION_REG = 0x87;              // Set prescaler for Timer0 (1:256)
+    TMR0 = 0;
+    TMR1H = 0;
+    TMR1L = 0;
+    H_L = 1;                         // Start PWM with high phase
 
-if(a==1){
-b=1;
-angle=3500;
-delay_in_ms(1000);
-b=0;
-a=0;
-}else{
-a=a;}
+    // Setup CCP1 for servo PWM
+    CCP1CON = 0x08;                 // Set CCP1 to compare mode (Set output on match)
+    T1CON = 0x01;                   // Enable Timer1
+    INTCON = 0b11100000;            // Enable Global, Peripheral, Timer0 interrupts
+    PIE1 |= 0x04;                   // Enable CCP1 interrupt
+    CCPR1H = 2000 >> 8;             // Initial servo angle (1ms pulse)
+    CCPR1L = 2000;
 
+    // Check initial state of servo toggle switch (PD5)
+    a = (PORTD & 0b00100000) ? 1 : 0;
 
-Tank_Distance=dist();
-if(Tank_Distance<11){
+    // Initialize peripherals
+    ATD_init();                     // Set up ADC
+    CCPPWM_init();                  // Set up PWM
 
-Lcd_Out(1,1,"Press Button       ");
-pump_speed=ATD_read();
+    // ==== Infinite main loop ====
+    while (1) {
+        if (PORTD & 0b00100000) { // If servo switch is ON
+            if (a == 1) {         // If not yet opened
+                b = 1;            // Enable PWM for servo
+                angle = 3500;     // Set angle to open
+                delay_in_ms(1000);
+                b = 0;            // Disable PWM after movement
+                a = 0;            // Mark servo as opened
+            }
 
+            Tank_Distance = dist();   // Measure tank distance
 
+            if (Tank_Distance < 11) { // Tank detected (close enough)
+                Lcd_Out(1, 1, "Press Button       ");
+                pump_speed = ATD_read(); // Read pump speed
 
+                // Manual mode (PD2 pressed)
+                if (PORTD & 0b00000100) {
+                    while (o == 1) {   // While cap is detected
+                        Lcd_Out(1, 1, "Loading.....       ");
+                        Speed(pump_speed);
+                        if (!(PORTD & 0b00000100)) break; // Exit if button released
+                    }
+                    Speed(0);
+                }
+                // Automatic mode (PD7 pressed)
+                else if (PORTD & 0b10000000) {
+                    if (o == 1) {
+                        while (o == 1) {
+                            Lcd_Out(1, 1, "Loading.....       ");
+                            Speed(100); delay_in_ms(2000);
+                            Speed(150); delay_in_ms(4000);
+                            Speed(100); delay_in_ms(2000);
+                            break;
+                        }
+                        Lcd_Out(1, 1, "Finish           ");
+                        PORTD |= 0b00010000; delay_in_ms(1000);
+                        PORTD &= 0b11101111;
+                        Speed(0);
+                    } else {
+                        Lcd_Out(1, 1, "There is no cap    ");
+                        delay_in_ms(1000);
+                    }
+                } else {
+                    Speed(0);
+                }
 
-if(PORTD&0B00000100){  //Manual Button Cheak
- while(o==1){
- Lcd_Out(1,1,"Loding.....        ");
-  Speed(pump_speed);
-  if(!(PORTD&0B00000100)){break;}
- }
- Speed(0);
+            } else {
+                Lcd_Out(1, 1, "No water           ");
+            }
 
-}else if (PORTD&0B10000000){  //Auto Button Cheak
-if(o==1){
- while(o==1){
-  Lcd_Out(1,1,"Loding.....       ");
-  Speed(100);
-  delay_in_ms(2000);
-  Speed(150);
-  delay_in_ms(4000);
-  Speed(100);
-  delay_in_ms(2000);
-  break;
- }
- Lcd_Out(1,1,"Finsh          ");
- PORTD=PORTD|0B00010000;
- delay_in_ms(1000);
- PORTD=PORTD&0B11101111;
- Speed(0);}else{
- Lcd_Out(1,1,"There is no cap     ");
- delay_in_ms(1000);
-
- }
- }else{
-  Speed(0);
- }
-
-
-
-
-}else{
-Lcd_Out(1,1,"No water");
-
-}
-
-
-}else{
-
-Lcd_Out(1,1,"Welcome         ");
-
-if(a==0){
-b=1;
-angle=1000;
-delay_in_ms(1000);
-b=0;
-a=1;}else{
-a=a;
-}
-
-
-
-}
-
-
-}
-
-
-
+        } else { // If servo switch is OFF
+            Lcd_Out(1, 1, "Welcome            ");
+            if (a == 0) { // Close cap
+                b = 1;
+                angle = 1000;
+                delay_in_ms(1000);
+                b = 0;
+                a = 1;
+            }
+        }
+    }
 }
