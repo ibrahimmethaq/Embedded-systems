@@ -1,0 +1,281 @@
+// LCD module connections
+sbit LCD_RS at RB4_bit;
+sbit LCD_EN at RB5_bit;
+sbit LCD_D4 at RB0_bit;
+sbit LCD_D5 at RB1_bit;
+sbit LCD_D6 at RB2_bit;
+sbit LCD_D7 at RB3_bit;
+
+sbit LCD_RS_Direction at TRISB4_bit;
+sbit LCD_EN_Direction at TRISB5_bit;
+sbit LCD_D4_Direction at TRISB0_bit;
+sbit LCD_D5_Direction at TRISB1_bit;
+sbit LCD_D6_Direction at TRISB2_bit;
+sbit LCD_D7_Direction at TRISB3_bit;
+// End LCD module connections
+
+
+
+
+
+
+
+
+int Tank_Distance=0;
+int angle;
+int H_L;
+int pump_speed;   //Value For pump speed from Potentiometer
+int b ;
+int GasValue;
+int time;
+
+
+void delay_in_ms(int time_ms) {
+    time=0;                 // Reset overflow counter
+    while (time < time_ms);
+}
+
+
+
+int o;
+void interrupt(void){
+
+     if(INTCON & 0x04){        //overflow in 32ms
+     
+               time++;
+               time=time/32; //for delay 1ms
+
+          if(PORTD&0B00001000){
+          O=0;
+          }else{
+          o=1;
+          }
+
+
+
+
+
+         INTCON = INTCON & 0xFB;    // clear timer 0 interrupt flag
+
+     }
+
+
+       if(PIR1 & 0x04){
+       if(b==1){                                           // CCP1 interrupt
+             if(H_L){                                // high
+                       CCPR1H = angle >> 8;
+                       CCPR1L = angle;
+                       H_L = 0;                      // next time low
+                       CCP1CON = 0x09;              // compare mode, clear output on match
+                       TMR1H = 0;
+                       TMR1L = 0;
+             }
+             else{                                          //low
+                       CCPR1H = (40000 - angle) >> 8;       // 40000 counts correspond to 20ms
+                       CCPR1L = (40000 - angle);
+                       CCP1CON = 0x08;             // compare mode, set output on match
+                       H_L = 1;                     //next time High
+                       TMR1H = 0;
+                       TMR1L = 0;
+             }  }else{
+              PIR1 = PIR1&0xFB;
+             }
+
+             PIR1 = PIR1&0xFB;
+       }
+
+
+ }
+
+
+
+int dist(){
+int d = 0;
+
+
+    TMR1H = 0;                  // Reset Timer1
+    TMR1L = 0;
+
+    PORTC = PORTC | 0b00001000; // Trigger HIGH
+    delay_in_ms(10);               // 10 µs delay
+    PORTC = PORTC & 0b11110111; // Trigger LOW
+
+    while (!(PORTC & 0b00010000));
+
+
+    T1CON = T1CON | 0b00000001; // Start Timer
+
+
+    while (PORTC & 0b00010000);
+
+
+    T1CON = T1CON & 0b11111110; // Stop Timer
+
+    d = (TMR1L | (TMR1H << 8)); // Read Timer1 value
+    d = d / 58.82;           // Convert time to distance (cm)
+    delay_ms(10);
+    T1CON = 0x01;
+    return d;
+}
+
+void ATD_init(){
+      ADCON0=0x41;           // ON, Channel 0, Fosc/16== 500KHz, Dont Go
+      ADCON1=0xCE;           // RA0 Analog, others are Digital, Right Allignment,
+      TRISA=0x01;
+}
+int ATD_read(){
+      ADCON0=ADCON0 | 0x04;  // GO
+      while(ADCON0&0x04);    // wait until DONE
+      return (ADRESH<<8)|ADRESL;
+}
+
+void CCPPWM_init(){                  // Configure CCP1 and CCP2 at 2ms period with 50% duty cycle
+        T2CON = 0x07;                    // Enable Timer2 at Fosc/4 with 1:16 prescaler (8 uS percount 2000uS to count 250 counts)
+        CCP2CON = 0x0C;                  // Enable PWM for CCP2
+        PR2 = 250;                       // 250 counts = 8uS *250 = 2ms period
+        CCPR2L = 125;                    // Buffer where we are specifying the pulse width (duty cycle)
+}
+
+
+void Speed(int p){
+       p = (((p>>2)*250)/255);
+       CCPR2L = p;                  // PWM from RC1
+}
+
+
+
+
+int a;  //Tick For Ultrasonic and Servo
+void main(){
+TRISA=0B00000000;
+TRISB=0B00000000;
+TRISC=0B00110000;
+TRISD=0B11101100;
+
+PORTA=0B00000000;
+PORTB=0B00000000;
+PORTC=0B00000000;
+PORTD=0B00000000;
+
+Lcd_Init();
+Lcd_Cmd(_LCD_CLEAR);               // Clear display
+Lcd_Cmd(_LCD_CURSOR_OFF);          // Cursor off
+
+
+
+
+
+
+OPTION_REG = 0x87; // 32.8ms overflow
+TMR0 = 0;
+TMR1H = 0;
+TMR1L = 0;
+H_L = 1;                // start high
+CCP1CON = 0x08;        // Compare mode, set output on match
+T1CON = 0x01;
+INTCON = 0b11100000;         // Enable GIE, peripheral interrupts and TMR0 Interrupt
+PIE1 = PIE1|0x04;      // Enable CCP1 interrupts
+CCPR1H = 2000>>8;      // Value preset in a program to compare the TMR1H value to            - 1ms
+CCPR1L = 2000;         // Value preset in a program to compare the TMR1L value to
+
+
+
+
+if(PORTD&0B00100000){     // Cheak the servo switch stats
+a=1;
+}else{
+a=0;
+}
+
+ATD_init();
+
+CCPPWM_init();
+
+while(1){
+
+if(PORTD&0B00100000){ // Servo switch is ON
+
+if(a==1){
+b=1;
+angle=3500;
+delay_in_ms(1000);
+b=0;
+a=0;
+}else{
+a=a;}
+
+
+Tank_Distance=dist();
+if(Tank_Distance<11){
+
+Lcd_Out(1,1,"Press Button       ");
+pump_speed=ATD_read();
+
+
+
+
+if(PORTD&0B00000100){  //Manual Button Cheak
+ while(o==1){
+ Lcd_Out(1,1,"Loding.....        ");
+  Speed(pump_speed);
+  if(!(PORTD&0B00000100)){break;}
+ }
+ Speed(0);
+
+}else if (PORTD&0B10000000){  //Auto Button Cheak
+if(o==1){
+ while(o==1){
+  Lcd_Out(1,1,"Loding.....       ");
+  Speed(100);
+  delay_in_ms(2000);
+  Speed(150);
+  delay_in_ms(4000);
+  Speed(100);
+  delay_in_ms(2000);
+  break;
+ }
+ Lcd_Out(1,1,"Finsh          ");
+ PORTD=PORTD|0B00010000;
+ delay_in_ms(1000);
+ PORTD=PORTD&0B11101111;
+ Speed(0);}else{
+ Lcd_Out(1,1,"There is no cap     ");
+ delay_in_ms(1000);
+
+ }
+ }else{
+  Speed(0);
+ }
+
+
+
+
+}else{
+Lcd_Out(1,1,"No water");
+
+}
+
+
+}else{
+
+Lcd_Out(1,1,"Welcome         ");
+
+if(a==0){
+b=1;
+angle=1000;
+delay_in_ms(1000);
+b=0;
+a=1;}else{
+a=a;
+}
+
+
+
+}
+
+
+}
+
+
+
+}
